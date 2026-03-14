@@ -9,7 +9,11 @@ from typing import Any
 import jsonschema
 import yaml
 
-SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schema" / "playbook.schema.json"
+# Schema bundled inside the converter package for pip-installed usage;
+# also check the repo-root schema/ dir for development installs.
+_PKG_SCHEMA = Path(__file__).resolve().parent / "playbook.schema.json"
+_REPO_SCHEMA = Path(__file__).resolve().parent.parent / "schema" / "playbook.schema.json"
+SCHEMA_PATH = _PKG_SCHEMA if _PKG_SCHEMA.exists() else _REPO_SCHEMA
 
 
 def _load_schema() -> dict[str, Any]:

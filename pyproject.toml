@@ -7,23 +7,60 @@ name = "guardduty-playbook-commons"
 version = "0.1.0"
 description = "Community-maintained GuardDuty finding remediation playbooks with multi-target converter"
 readme = "README.md"
-license = "Apache-2.0"
+license = {text = "Apache-2.0"}
 requires-python = ">=3.11"
+authors = [{name = "Paul Frederiksen"}]
+keywords = [
+    "aws",
+    "guardduty",
+    "security",
+    "incident-response",
+    "soar",
+    "playbooks",
+    "remediation",
+    "cloud-security",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: System :: Systems Administration",
+]
 dependencies = [
-    "click>=8.0",
-    "pyyaml>=6.0",
-    "jsonschema>=4.0",
+    "click>=8.0,<9",
+    "pyyaml>=6.0,<7",
+    "jsonschema>=4.0,<5",
 ]
 
 [project.optional-dependencies]
 runbook = ["boto3>=1.28"]
-dev = ["pytest>=7.0", "ruff>=0.4"]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.4",
+    "build>=0.10.0",
+    "twine>=4.0.0",
+]
 
 [project.scripts]
 gdpc = "converter.cli:cli"
 
+[project.urls]
+Homepage = "https://github.com/pfrederiksen/guardduty-playbook-commons"
+Repository = "https://github.com/pfrederiksen/guardduty-playbook-commons"
+Issues = "https://github.com/pfrederiksen/guardduty-playbook-commons/issues"
+
 [tool.hatch.build.targets.wheel]
 packages = ["converter"]
+
+[tool.hatch.build.targets.sdist]
+include = ["converter/", "schema/", "playbooks/"]
 
 [tool.ruff]
 target-version = "py311"
