@@ -40,7 +40,9 @@ See [docs/schema.md](docs/schema.md) for the complete field reference.
 ## Testing Locally
 
 ```bash
-# Install in development mode
+# Clone and install in development mode
+git clone https://github.com/pfrederiksen/guardduty-playbook-commons.git
+cd guardduty-playbook-commons
 pip install -e ".[dev]"
 
 # Validate all playbooks

@@ -1,4 +1,5 @@
 [![CI](https://github.com/pfrederiksen/guardduty-playbook-commons/actions/workflows/ci.yml/badge.svg)](https://github.com/pfrederiksen/guardduty-playbook-commons/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/guardduty-playbook-commons)](https://pypi.org/project/guardduty-playbook-commons/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 
@@ -6,11 +7,27 @@
 
 Security teams rebuild the same GuardDuty response logic repeatedly — one team writes Tines workflows, another builds Step Functions, a third maintains Python scripts — all encoding identical remediation knowledge in proprietary formats. **guardduty-playbook-commons** defines playbook logic once in a vendor-neutral YAML schema and compiles it to multiple automation targets. Think "Sigma Rules but for incident response."
 
+## Installation
+
+```bash
+# Install from PyPI
+pip install guardduty-playbook-commons
+
+# Or install from source (for development or to get the playbook YAML files)
+git clone https://github.com/pfrederiksen/guardduty-playbook-commons.git
+cd guardduty-playbook-commons
+pip install -e ".[dev]"
+```
+
+To run the generated Python runbooks, also install boto3:
+
+```bash
+pip install guardduty-playbook-commons[runbook]
+```
+
 ## Quick Start
 
 ```bash
-pip install -e .
-
 # Convert a single playbook to a Python runbook
 gdpc convert playbooks/iam/IAMUser-AnomalousBehavior.yaml --target python --output out/
 
