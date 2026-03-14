@@ -1,0 +1,123 @@
+id: lambda-network-port-probing
+version: "1.0.0"
+finding_type: "Backdoor/Lambda.NetworkPortProbing"
+severity: [MEDIUM, HIGH]
+description: >
+  A Lambda function is probing remote hosts on multiple ports, which is
+  indicative of a compromised function being used for network reconnaissance.
+  The function code may have been modified by an attacker, or a dependency
+  in the deployment package may be malicious.
+references:
+  - https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_finding-types-lambda.html
+  - https://docs.aws.amazon.com/lambda/latest/dg/security-overview.html
+
+triage:
+  - step: "Identify the Lambda function and its purpose"
+    how: >
+      Extract the function name from resource.lambdaDetails.functionName and
+      the ARN from resource.lambdaDetails.functionArn. Review the function's
+      tags, description, and associated application. Contact the function
+      owner to determine if port scanning could be legitimate behavior
+      (e.g., network health check utilities).
+  - step: "Review recent changes to the function code and configuration"
+    how: >
+      Check CloudTrail for UpdateFunctionCode and UpdateFunctionConfiguration
+      events for this function. Determine if the function code was recently
+      modified and by whom. Review the deployment pipeline for unauthorized
+      changes. Check if any Lambda layers were recently added or modified.
+  - step: "Analyze the network activity details from the finding"
+    how: >
+      Review service.action.networkConnectionAction to identify the target
+      IPs and ports being probed. Determine if the targets are internal
+      (VPC) or external. A broad port scan of internal resources may indicate
+      lateral movement attempts.
+
+investigation:
+  queries:
+    - name: "CloudTrail events for Lambda function modifications"
+      type: athena
+      template: |
+        SELECT eventTime, eventName, sourceIPAddress,
+               userIdentity.arn AS actor_arn,
+               userIdentity.userName AS actor_name,
+               requestParameters, responseElements
+        FROM cloudtrail_logs
+        WHERE eventSource = 'lambda.amazonaws.com'
+          AND eventName IN ('UpdateFunctionCode', 'UpdateFunctionCode20150331v2',
+                            'UpdateFunctionConfiguration', 'UpdateFunctionConfiguration20150331v2',
+                            'PublishLayerVersion', 'AddLayerVersionPermission',
+                            'CreateFunction', 'CreateFunction20150331')
+          AND requestParameters LIKE '%{{ function_name }}%'
+          AND recipientAccountId = '{{ account_id }}'
+          AND eventTime > DATE_ADD('day', -30, NOW())
+        ORDER BY eventTime DESC
+    - name: "Lambda invocation patterns and errors"
+      type: cloudwatch_logs
+      template: |
+        fields @timestamp, @message, @requestId
+        | filter @logStream LIKE '{{ function_name }}'
+        | filter @message LIKE /connect|socket|scan|port|probe|timeout|ECONNREFUSED/
+        | sort @timestamp desc
+        | limit 200
+
+containment:
+  automated: false
+  actions:
+    - id: disable-lambda-function
+      description: >
+        Set the function's reserved concurrency to 0, which prevents any
+        new invocations while preserving the function code for investigation.
+        This is preferable to deleting the function as it preserves evidence.
+      aws_cli: >
+        aws lambda put-function-concurrency
+        --function-name '{{ function_arn }}'
+        --reserved-concurrent-executions 0
+        --region {{ region }}
+      requires_confirmation: true
+    - id: review-function-code
+      description: "Download the current function code for security review and analysis"
+      aws_cli: >
+        aws lambda get-function
+        --function-name '{{ function_arn }}'
+        --query 'Code.Location'
+        --output text
+        --region {{ region }}
+      requires_confirmation: false
+    - id: revoke-function-role-sessions
+      description: "Revoke active sessions for the function's execution role to prevent further API abuse"
+      aws_cli: >
+        aws lambda get-function-configuration
+        --function-name '{{ function_arn }}'
+        --query 'Role'
+        --output text
+        --region {{ region }}
+      requires_confirmation: false
+    - id: remove-function-permissions
+      description: "Remove resource-based policies that allow external invocation of this function"
+      aws_cli: >
+        aws lambda get-policy
+        --function-name '{{ function_arn }}'
+        --region {{ region }}
+        --output json
+      requires_confirmation: false
+
+escalation:
+  notify:
+    - channel: slack
+      condition: "severity in ['MEDIUM', 'HIGH']"
+      message: >
+        LAMBDA PORT PROBING: Function {{ function_name }} ({{ function_arn }})
+        in account {{ account_id }} ({{ region }}) is probing network ports.
+        Function may be compromised. Investigation required.
+  page:
+    condition: "severity == 'HIGH'"
+
+variables:
+  - name: function_name
+    source: finding.resource.lambdaDetails.functionName
+  - name: function_arn
+    source: finding.resource.lambdaDetails.functionArn
+  - name: account_id
+    source: finding.accountId
+  - name: region
+    source: finding.region

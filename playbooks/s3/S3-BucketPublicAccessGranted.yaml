@@ -1,0 +1,117 @@
+id: s3-bucket-public-access-granted
+version: "1.0.0"
+finding_type: "Policy/S3BucketPublicAccessGranted"
+severity: [HIGH, CRITICAL]
+description: >
+  An S3 bucket policy or ACL was changed to allow public access. This could
+  expose sensitive data to the internet. The finding is generated when
+  Block Public Access settings are not sufficient to prevent public exposure
+  via bucket policies or ACLs.
+references:
+  - https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_finding-types-s3.html#policys3bucketpublicaccessgranted
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html
+
+triage:
+  - step: "Identify the bucket and the actor who made the change"
+    how: >
+      Extract the bucket name from resource.s3BucketDetails[0].name and the
+      actor from service.action.awsApiCallAction.callerType and the
+      remoteIpDetails. Determine if this was an authorized change by
+      cross-referencing the actor with your change management records
+      and approved deployment pipelines.
+  - step: "Assess the sensitivity of the bucket's contents"
+    how: >
+      Check the bucket's tags, name prefix, and S3 Inventory (if available)
+      to determine what data is stored. Cross-reference with your data
+      classification policy. If the bucket contains PII, PHI, financial data,
+      or credentials, escalate immediately regardless of intent.
+  - step: "Check current bucket policy and ACL state"
+    how: >
+      Run 'aws s3api get-bucket-policy' and 'aws s3api get-bucket-acl' to
+      verify the current state. Check if Block Public Access settings at the
+      account or bucket level would still prevent public access despite the
+      policy/ACL change.
+
+investigation:
+  queries:
+    - name: "S3 bucket policy and ACL modification events"
+      type: athena
+      template: |
+        SELECT eventTime, eventName, sourceIPAddress,
+               userIdentity.arn AS actor_arn,
+               userIdentity.userName AS actor_name,
+               requestParameters,
+               responseElements
+        FROM cloudtrail_logs
+        WHERE recipientAccountId = '{{ account_id }}'
+          AND eventSource = 's3.amazonaws.com'
+          AND eventName IN ('PutBucketPolicy', 'PutBucketAcl',
+                            'DeleteBucketPolicy', 'PutBucketPublicAccessBlock',
+                            'DeleteBucketPublicAccessBlock')
+          AND requestParameters LIKE '%{{ bucket_name }}%'
+          AND eventTime > DATE_ADD('day', -7, NOW())
+        ORDER BY eventTime DESC
+    - name: "Recent access to the exposed bucket from public IPs"
+      type: athena
+      template: |
+        SELECT eventTime, eventName, sourceIPAddress, userAgent,
+               requestParameters
+        FROM cloudtrail_logs
+        WHERE recipientAccountId = '{{ account_id }}'
+          AND eventSource = 's3.amazonaws.com'
+          AND requestParameters LIKE '%{{ bucket_name }}%'
+          AND userIdentity.accountId = 'ANONYMOUS_PRINCIPAL'
+          AND eventTime > DATE_ADD('day', -3, NOW())
+        ORDER BY eventTime DESC
+        LIMIT 200
+
+containment:
+  automated: false
+  actions:
+    - id: enable-block-public-access
+      description: "Enable S3 Block Public Access on the bucket to immediately prevent all public access"
+      aws_cli: >
+        aws s3api put-public-access-block
+        --bucket '{{ bucket_name }}'
+        --public-access-block-configuration
+        'BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true'
+        --region {{ region }}
+      requires_confirmation: true
+    - id: review-bucket-policy
+      description: "Retrieve the current bucket policy for review and potential rollback"
+      aws_cli: >
+        aws s3api get-bucket-policy
+        --bucket '{{ bucket_name }}'
+        --query 'Policy'
+        --output text
+        --region {{ region }}
+      requires_confirmation: false
+    - id: remove-public-acl-grants
+      description: "Reset the bucket ACL to private, removing all public grants"
+      aws_cli: >
+        aws s3api put-bucket-acl
+        --bucket '{{ bucket_name }}'
+        --acl private
+        --region {{ region }}
+      requires_confirmation: true
+
+escalation:
+  notify:
+    - channel: slack
+      condition: "severity in ['HIGH', 'CRITICAL']"
+      message: >
+        S3 PUBLIC ACCESS: Bucket {{ bucket_name }} in account {{ account_id }}
+        ({{ region }}) has been granted public access. Immediate review required
+        to prevent data exposure. Finding ID: {{ finding_id }}.
+  page:
+    condition: "severity == 'CRITICAL'"
+
+variables:
+  - name: bucket_name
+    source: finding.resource.s3BucketDetails[0].name
+  - name: account_id
+    source: finding.accountId
+  - name: region
+    source: finding.region
+  - name: finding_id
+    source: finding.id

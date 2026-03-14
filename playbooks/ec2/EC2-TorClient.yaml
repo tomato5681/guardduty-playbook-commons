@@ -1,0 +1,119 @@
+id: ec2-tor-client
+version: "1.0.0"
+finding_type: "UnauthorizedAccess/EC2TorClient"
+severity: [HIGH]
+description: >
+  An EC2 instance is making connections to a Tor Guard or Authority node,
+  indicating the instance is acting as a Tor client. Unless Tor usage is
+  explicitly authorized for this workload, this may indicate the instance
+  has been compromised and an attacker is using Tor to anonymize their
+  command-and-control traffic or data exfiltration.
+references:
+  - https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_finding-types-ec2.html#unauthorizedaccessec2torclient
+  - https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_finding-types-ec2.html
+
+triage:
+  - step: "Determine if Tor usage is authorized for this workload"
+    how: >
+      Check the instance tags (Application, Team, Owner) and cross-reference
+      with your security policy on Tor usage. Some legitimate use cases include
+      security research, privacy tools, or specific application requirements.
+      If Tor is not authorized, treat this as a confirmed compromise indicator.
+  - step: "Identify the Tor connection details"
+    how: >
+      Review the finding's service.action.networkConnectionAction for the
+      remote IP, port, and connection direction. Tor Guard nodes typically
+      listen on port 9001 or 443. Check if the instance has been connecting
+      to multiple Tor nodes, which would confirm active Tor circuit building.
+  - step: "Check for other indicators of compromise on the instance"
+    how: >
+      Review other GuardDuty findings for this instance (e.g., crypto mining,
+      port scanning, C2 activity). Check CloudTrail for unauthorized API
+      calls using the instance's role credentials. Review SSM Agent logs
+      or SSH access logs if available.
+
+investigation:
+  queries:
+    - name: "VPC Flow Logs for Tor-related connections from the instance"
+      type: athena
+      template: |
+        SELECT srcaddr, dstaddr, dstport, protocol,
+               numpackets, numbytes, action,
+               FROM_UNIXTIME(starttime) AS start_time,
+               FROM_UNIXTIME(endtime) AS end_time
+        FROM vpc_flow_logs
+        WHERE srcaddr = '{{ private_ip }}'
+          AND dstport IN (9001, 9030, 9040, 9050, 9051, 9150)
+          AND starttime > CAST(TO_UNIXTIME(DATE_ADD('day', -7, NOW())) AS BIGINT)
+        ORDER BY starttime DESC
+        LIMIT 500
+    - name: "CloudTrail API calls made by the instance role during the incident window"
+      type: athena
+      template: |
+        SELECT eventTime, eventSource, eventName, sourceIPAddress,
+               userAgent, errorCode, requestParameters
+        FROM cloudtrail_logs
+        WHERE userIdentity.arn LIKE '%{{ instance_id }}%'
+          AND recipientAccountId = '{{ account_id }}'
+          AND eventTime > DATE_ADD('day', -3, NOW())
+        ORDER BY eventTime DESC
+        LIMIT 500
+
+containment:
+  automated: false
+  actions:
+    - id: isolate-instance
+      description: >
+        Replace all security groups with a forensic isolation group. This
+        blocks all inbound and outbound traffic, severing Tor connections
+        and any other C2 channels.
+      aws_cli: >
+        aws ec2 modify-instance-attribute
+        --instance-id '{{ instance_id }}'
+        --groups '{{ isolation_sg_id }}'
+        --region {{ region }}
+      requires_confirmation: true
+    - id: snapshot-ebs-volumes
+      description: "Create EBS snapshots for forensic analysis before any remediation"
+      aws_cli: >
+        aws ec2 describe-instances
+        --instance-ids '{{ instance_id }}'
+        --query 'Reservations[0].Instances[0].BlockDeviceMappings[*].Ebs.VolumeId'
+        --output text
+        --region {{ region }}
+        | xargs -I {} aws ec2 create-snapshot --volume-id {} --description 'GuardDuty forensic snapshot - Tor client - {{ instance_id }}' --tag-specifications 'ResourceType=snapshot,Tags=[{Key=SecurityIncident,Value=TorClient},{Key=InstanceId,Value={{ instance_id }}}]' --region {{ region }}
+      requires_confirmation: true
+    - id: revoke-instance-role-sessions
+      description: "Revoke all active sessions for the instance's IAM role to prevent credential abuse"
+      aws_cli: >
+        aws iam put-role-policy
+        --role-name '{{ instance_role_name }}'
+        --policy-name 'GuardDuty-RevokeOldSessions'
+        --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"*","Resource":"*","Condition":{"DateLessThan":{"aws:TokenIssueTime":"{{ now_iso8601 }}"}}}]}'
+        --region {{ region }}
+      requires_confirmation: true
+
+escalation:
+  notify:
+    - channel: slack
+      condition: "severity == 'HIGH'"
+      message: >
+        TOR CLIENT DETECTED: EC2 instance {{ instance_id }} ({{ private_ip }})
+        in account {{ account_id }} ({{ region }}) is communicating with Tor
+        network nodes. Likely compromised. Immediate investigation required.
+  page:
+    condition: "severity == 'CRITICAL'"
+
+variables:
+  - name: instance_id
+    source: finding.resource.instanceDetails.instanceId
+  - name: private_ip
+    source: finding.resource.instanceDetails.networkInterfaces[0].privateIpAddress
+  - name: account_id
+    source: finding.accountId
+  - name: region
+    source: finding.region
+  - name: instance_role_name
+    source: finding.resource.instanceDetails.iamInstanceProfile.arn
+  - name: now_iso8601
+    source: runtime.now_iso8601

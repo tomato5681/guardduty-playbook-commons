@@ -1,0 +1,112 @@
+id: iam-user-anomalous-behavior
+version: "1.0.0"
+finding_type: "IAMUser/AnomalousBehavior"
+severity: [MEDIUM, HIGH, CRITICAL]
+description: >
+  An IAM principal has invoked APIs in an anomalous way. GuardDuty's ML model
+  detected API calls that deviate from the principal's established baseline.
+  This may indicate compromised credentials or insider misuse.
+references:
+  - https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_finding-types-iam.html#iamuseranomalosbehavior
+  - https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_finding-types-iam.html
+
+triage:
+  - step: "Determine if the principal is a human user or a service account"
+    how: >
+      Check the userName and userType in the finding's accessKeyDetails.
+      If userType is 'Role', inspect the role's trust policy to identify
+      the assuming service or user. Cross-reference with your IAM inventory
+      to determine ownership and expected usage patterns.
+  - step: "Review CloudTrail activity for the principal over the past 24 hours"
+    how: >
+      Search CloudTrail for all events by this principal in the last 24h.
+      Focus on unusual API calls, new regions, unfamiliar source IPs,
+      and any calls to sensitive services (IAM, STS, KMS, S3, Lambda).
+      Compare against the principal's normal baseline activity.
+  - step: "Verify the anomalous API calls flagged by GuardDuty"
+    how: >
+      Review the finding's service.additionalInfo.anomalous field to see
+      which specific APIs were flagged as anomalous. Determine whether
+      any of these calls are expected given recent operational changes
+      (e.g., new deployment, migration, or authorized automation).
+
+investigation:
+  queries:
+    - name: "Recent API calls by the principal (last 24h)"
+      type: athena
+      template: |
+        SELECT eventTime, eventSource, eventName, sourceIPAddress,
+               userAgent, errorCode, requestParameters
+        FROM cloudtrail_logs
+        WHERE userIdentity.userName = '{{ principal_id }}'
+          AND eventTime > DATE_ADD('hour', -24, NOW())
+          AND recipientAccountId = '{{ account_id }}'
+        ORDER BY eventTime DESC
+        LIMIT 500
+    - name: "Anomalous API calls from unusual source IPs"
+      type: athena
+      template: |
+        SELECT sourceIPAddress, COUNT(*) as call_count,
+               ARRAY_AGG(DISTINCT eventName) as api_calls,
+               MIN(eventTime) as first_seen,
+               MAX(eventTime) as last_seen
+        FROM cloudtrail_logs
+        WHERE userIdentity.userName = '{{ principal_id }}'
+          AND eventTime > DATE_ADD('hour', -48, NOW())
+          AND recipientAccountId = '{{ account_id }}'
+        GROUP BY sourceIPAddress
+        ORDER BY call_count DESC
+
+containment:
+  automated: false
+  actions:
+    - id: attach-deny-all-policy
+      description: "Attach an inline DenyAll policy to the IAM user to block all API access"
+      aws_cli: >
+        aws iam put-user-policy
+        --user-name '{{ principal_id }}'
+        --policy-name 'GuardDuty-Quarantine-DenyAll'
+        --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"*","Resource":"*"}]}'
+        --region {{ region }}
+      requires_confirmation: true
+    - id: disable-console-access
+      description: "Delete the IAM user's login profile to revoke console access"
+      aws_cli: >
+        aws iam delete-login-profile
+        --user-name '{{ principal_id }}'
+        --region {{ region }}
+      requires_confirmation: true
+    - id: deactivate-access-keys
+      description: "Deactivate all active access keys for the IAM user"
+      aws_cli: >
+        aws iam list-access-keys --user-name '{{ principal_id }}' --query 'AccessKeyMetadata[?Status==`Active`].AccessKeyId' --output text |
+        xargs -I {} aws iam update-access-key --user-name '{{ principal_id }}' --access-key-id {} --status Inactive
+      requires_confirmation: true
+
+escalation:
+  notify:
+    - channel: slack
+      condition: "severity in ['HIGH', 'CRITICAL']"
+      message: >
+        GuardDuty: Anomalous behavior detected for IAM user {{ principal_id }}
+        in account {{ account_id }} ({{ region }}). Severity: {{ severity }}.
+        Finding ID: {{ finding_id }}.
+    - channel: slack
+      condition: "severity == 'MEDIUM'"
+      message: >
+        GuardDuty: Medium-severity anomalous behavior detected for IAM user
+        {{ principal_id }} in account {{ account_id }}. Review recommended.
+  page:
+    condition: "severity == 'CRITICAL'"
+
+variables:
+  - name: principal_id
+    source: finding.resource.accessKeyDetails.userName
+  - name: account_id
+    source: finding.accountId
+  - name: region
+    source: finding.region
+  - name: finding_id
+    source: finding.id
+  - name: severity
+    source: finding.severity

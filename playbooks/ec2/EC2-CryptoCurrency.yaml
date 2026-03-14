@@ -1,0 +1,113 @@
+id: ec2-cryptocurrency-mining
+version: "1.0.0"
+finding_type: "CryptoCurrency/EC2BitcoinTool.B!DNS"
+severity: [HIGH]
+description: >
+  An EC2 instance is querying DNS names associated with cryptocurrency
+  mining pools. This strongly indicates the instance has been compromised
+  and is being used for unauthorized cryptocurrency mining, which results
+  in increased compute costs and may indicate a broader compromise.
+references:
+  - https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_finding-types-ec2.html#cryptocurrencyec2bitcointoolbdns
+  - https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_finding-types-ec2.html
+
+triage:
+  - step: "Identify the instance owner and purpose"
+    how: >
+      Retrieve the instance's tags (Owner, Application, Environment, Team)
+      using the instance ID from resource.instanceDetails.instanceId. Check
+      whether this is a production, staging, or development workload.
+      Contact the instance owner to determine if cryptocurrency mining
+      could be an authorized activity (extremely rare).
+  - step: "Verify the DNS queries triggering the finding"
+    how: >
+      Review the finding's service.action.dnsRequestAction.domain to see
+      which mining pool domain was queried. Common mining pool domains
+      include stratum+tcp endpoints and *pool* domains. If Route 53
+      Resolver query logging is enabled, search for additional mining-related
+      DNS queries from this instance.
+  - step: "Assess how the instance may have been compromised"
+    how: >
+      Check the instance's security groups for overly permissive inbound
+      rules (e.g., 0.0.0.0/0 on SSH/RDP). Review the instance's IAM role
+      for excessive permissions. Check if the instance is running unpatched
+      software or is publicly accessible.
+
+investigation:
+  queries:
+    - name: "VPC Flow Logs for connections to known mining pool ports"
+      type: athena
+      template: |
+        SELECT srcaddr, dstaddr, dstport, protocol,
+               numpackets, numbytes,
+               FROM_UNIXTIME(starttime) AS start_time,
+               FROM_UNIXTIME(endtime) AS end_time
+        FROM vpc_flow_logs
+        WHERE srcaddr = '{{ private_ip }}'
+          AND dstport IN (3333, 4444, 5555, 7777, 8888, 9999, 14444, 14433)
+          AND starttime > CAST(TO_UNIXTIME(DATE_ADD('day', -3, NOW())) AS BIGINT)
+        ORDER BY starttime DESC
+        LIMIT 500
+    - name: "DNS query logs for mining-related domains from the instance"
+      type: cloudwatch_logs
+      template: |
+        fields @timestamp, query_name, srcaddr, rcode
+        | filter srcaddr = '{{ private_ip }}'
+        | filter query_name LIKE /pool|mining|stratum|crypto|nicehash|nanopool|ethermine|f2pool/
+        | sort @timestamp desc
+        | limit 200
+
+containment:
+  automated: false
+  actions:
+    - id: isolate-instance
+      description: >
+        Replace all security groups on the instance with a forensic isolation
+        group that denies all inbound and outbound traffic. This immediately
+        stops the mining activity and any C2 communication.
+      aws_cli: >
+        aws ec2 modify-instance-attribute
+        --instance-id '{{ instance_id }}'
+        --groups '{{ isolation_sg_id }}'
+        --region {{ region }}
+      requires_confirmation: true
+    - id: snapshot-ebs-volumes
+      description: "Create snapshots of all EBS volumes attached to the instance for forensic analysis"
+      aws_cli: >
+        aws ec2 describe-instances
+        --instance-ids '{{ instance_id }}'
+        --query 'Reservations[0].Instances[0].BlockDeviceMappings[*].Ebs.VolumeId'
+        --output text
+        --region {{ region }}
+        | xargs -I {} aws ec2 create-snapshot --volume-id {} --description 'GuardDuty forensic snapshot - crypto mining - {{ instance_id }}' --tag-specifications 'ResourceType=snapshot,Tags=[{Key=SecurityIncident,Value=CryptoMining},{Key=InstanceId,Value={{ instance_id }}}]' --region {{ region }}
+      requires_confirmation: true
+    - id: stop-instance
+      description: "Stop the EC2 instance to halt mining activity after forensic snapshots are created"
+      aws_cli: >
+        aws ec2 stop-instances
+        --instance-ids '{{ instance_id }}'
+        --region {{ region }}
+      requires_confirmation: true
+
+escalation:
+  notify:
+    - channel: slack
+      condition: "severity == 'HIGH'"
+      message: >
+        CRYPTO MINING DETECTED: EC2 instance {{ instance_id }} in account
+        {{ account_id }} ({{ region }}) is querying cryptocurrency mining pool
+        DNS names. Instance likely compromised. Isolate and investigate.
+  page:
+    condition: "severity == 'CRITICAL'"
+
+variables:
+  - name: instance_id
+    source: finding.resource.instanceDetails.instanceId
+  - name: private_ip
+    source: finding.resource.instanceDetails.networkInterfaces[0].privateIpAddress
+  - name: security_group_id
+    source: finding.resource.instanceDetails.networkInterfaces[0].securityGroups[0].groupId
+  - name: account_id
+    source: finding.accountId
+  - name: region
+    source: finding.region

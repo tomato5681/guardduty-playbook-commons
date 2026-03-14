@@ -1,0 +1,194 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GuardDuty Playbook",
+  "description": "Schema for GuardDuty finding remediation playbooks",
+  "type": "object",
+  "required": ["id", "version", "finding_type", "severity", "description", "triage", "variables"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]*$",
+      "description": "Unique playbook identifier (alphanumeric, hyphens, underscores only)"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semantic version of the playbook"
+    },
+    "finding_type": {
+      "type": "string",
+      "description": "Exact GuardDuty finding type string"
+    },
+    "severity": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+      },
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Severity levels that trigger this playbook"
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable description of the playbook"
+    },
+    "references": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uri"
+      },
+      "description": "Links to relevant documentation"
+    },
+    "triage": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["step", "how"],
+        "additionalProperties": false,
+        "properties": {
+          "step": {
+            "type": "string",
+            "description": "What to do in this triage step"
+          },
+          "how": {
+            "type": "string",
+            "description": "How to perform this step (CLI command, console instruction, etc.)"
+          }
+        }
+      },
+      "description": "Initial triage steps to assess the finding"
+    },
+    "investigation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "queries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "type", "template"],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Descriptive name for the query"
+              },
+              "type": {
+                "type": "string",
+                "enum": ["cloudtrail_insights", "cloudwatch_logs", "athena"],
+                "description": "Query engine type"
+              },
+              "template": {
+                "type": "string",
+                "description": "Query template with {variable} placeholders"
+              }
+            }
+          }
+        }
+      },
+      "description": "Investigation queries to understand the scope"
+    },
+    "containment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "automated": {
+          "type": "boolean",
+          "description": "Whether containment actions execute automatically"
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "description", "aws_cli"],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-zA-Z][a-zA-Z0-9_-]*$",
+                "description": "Unique action identifier (alphanumeric, hyphens, underscores)"
+              },
+              "description": {
+                "type": "string",
+                "description": "What this action does"
+              },
+              "aws_cli": {
+                "type": "string",
+                "description": "AWS CLI command to execute"
+              },
+              "requires_confirmation": {
+                "type": "boolean",
+                "description": "Whether this action needs human approval before execution"
+              }
+            }
+          }
+        }
+      },
+      "description": "Containment actions to limit blast radius"
+    },
+    "escalation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "notify": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["channel", "condition", "message"],
+            "additionalProperties": false,
+            "properties": {
+              "channel": {
+                "type": "string",
+                "description": "Notification channel (e.g. slack, email, pagerduty)"
+              },
+              "condition": {
+                "type": "string",
+                "description": "Condition expression for when to notify"
+              },
+              "message": {
+                "type": "string",
+                "description": "Notification message template"
+              }
+            }
+          }
+        },
+        "page": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "condition": {
+              "type": "string",
+              "description": "Condition expression for when to page on-call"
+            }
+          }
+        }
+      },
+      "description": "Escalation rules for notifications and paging"
+    },
+    "variables": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "source"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+            "description": "Variable name (valid Python identifier, no keywords)"
+          },
+          "source": {
+            "type": "string",
+            "description": "Dot-notation path in the GuardDuty finding JSON"
+          }
+        }
+      },
+      "description": "Variables extracted from the GuardDuty finding"
+    }
+  }
+}

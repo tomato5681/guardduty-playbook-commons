@@ -1,0 +1,118 @@
+id: s3-malicious-ip-caller
+version: "1.0.0"
+finding_type: "UnauthorizedAccess/S3MaliciousIPCaller.Custom"
+severity: [MEDIUM, HIGH, CRITICAL]
+description: >
+  An S3 API was invoked from an IP address on a custom threat list.
+  This indicates a known malicious actor is accessing S3 resources in your
+  account. Investigate immediately to determine what data may have been
+  accessed or exfiltrated.
+references:
+  - https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_finding-types-s3.html#unauthorizedaccesss3maliciousipcallercustom
+  - https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_upload-lists.html
+
+triage:
+  - step: "Verify the malicious IP against threat intelligence"
+    how: >
+      Check the IP address from service.action.awsApiCallAction.remoteIpDetails
+      against your threat intel feeds (VirusTotal, AbuseIPDB, Shodan) to
+      confirm it is malicious. Review the IP's geolocation, ASN, and
+      organization. Determine which custom threat list triggered this finding.
+  - step: "Determine what S3 objects were accessed or modified"
+    how: >
+      Review the finding's service.action.awsApiCallAction.api field to see
+      which S3 API was called (GetObject, ListObjects, PutObject, etc.).
+      If S3 server access logging or CloudTrail data events are enabled for
+      the bucket, query them to identify all objects that were accessed from
+      the malicious IP.
+  - step: "Assess the data classification of the affected bucket"
+    how: >
+      Check the bucket tags and contents against your data classification
+      policy. If the bucket contains regulated data (PII, PHI, PCI), this
+      may constitute a reportable data breach and legal/compliance must
+      be notified.
+
+investigation:
+  queries:
+    - name: "All S3 API calls from the malicious IP"
+      type: athena
+      template: |
+        SELECT eventTime, eventName, userIdentity.arn AS actor_arn,
+               requestParameters, responseElements,
+               errorCode, errorMessage
+        FROM cloudtrail_logs
+        WHERE sourceIPAddress = '{{ remote_ip }}'
+          AND eventSource = 's3.amazonaws.com'
+          AND recipientAccountId = '{{ account_id }}'
+          AND eventTime > DATE_ADD('day', -30, NOW())
+        ORDER BY eventTime DESC
+        LIMIT 500
+    - name: "S3 data events for the affected bucket from any suspicious IP"
+      type: athena
+      template: |
+        SELECT eventTime, eventName, sourceIPAddress,
+               userIdentity.arn AS actor_arn,
+               JSON_EXTRACT_SCALAR(requestParameters, '$.bucketName') AS bucket,
+               JSON_EXTRACT_SCALAR(requestParameters, '$.key') AS object_key
+        FROM cloudtrail_logs
+        WHERE eventSource = 's3.amazonaws.com'
+          AND readOnly = true
+          AND requestParameters LIKE '%{{ bucket_name }}%'
+          AND recipientAccountId = '{{ account_id }}'
+          AND eventTime > DATE_ADD('day', -7, NOW())
+        ORDER BY eventTime DESC
+        LIMIT 1000
+
+containment:
+  automated: false
+  actions:
+    - id: deny-malicious-ip-bucket-policy
+      description: "Add a bucket policy statement to explicitly deny all access from the malicious IP"
+      aws_cli: >
+        aws s3api put-bucket-policy
+        --bucket '{{ bucket_name }}'
+        --policy '{"Version":"2012-10-17","Statement":[{"Sid":"DenyMaliciousIP","Effect":"Deny","Principal":"*","Action":"s3:*","Resource":["arn:aws:s3:::{{ bucket_name }}","arn:aws:s3:::{{ bucket_name }}/*"],"Condition":{"IpAddress":{"aws:SourceIp":"{{ remote_ip }}/32"}}}]}'
+        --region {{ region }}
+      requires_confirmation: true
+    - id: enable-s3-server-access-logging
+      description: "Enable S3 server access logging if not already enabled to capture detailed access records"
+      aws_cli: >
+        aws s3api put-bucket-logging
+        --bucket '{{ bucket_name }}'
+        --bucket-logging-status '{"LoggingEnabled":{"TargetBucket":"{{ logging_bucket }}","TargetPrefix":"s3-access-logs/{{ bucket_name }}/"}}'
+        --region {{ region }}
+      requires_confirmation: true
+    - id: review-bucket-permissions
+      description: "List all bucket policy statements and ACL grants to identify overly permissive access"
+      aws_cli: >
+        aws s3api get-bucket-policy --bucket '{{ bucket_name }}' --region {{ region }} --output json;
+        aws s3api get-bucket-acl --bucket '{{ bucket_name }}' --region {{ region }} --output json
+      requires_confirmation: false
+
+escalation:
+  notify:
+    - channel: slack
+      condition: "severity in ['HIGH', 'CRITICAL']"
+      message: >
+        MALICIOUS S3 ACCESS: IP {{ remote_ip }} (on custom threat list) accessed
+        bucket {{ bucket_name }} in account {{ account_id }} ({{ region }}).
+        Potential data exfiltration. Immediate investigation required.
+    - channel: slack
+      condition: "severity == 'MEDIUM'"
+      message: >
+        GuardDuty: Malicious IP {{ remote_ip }} accessed S3 bucket
+        {{ bucket_name }} in account {{ account_id }}. Review recommended.
+  page:
+    condition: "severity == 'CRITICAL'"
+
+variables:
+  - name: bucket_name
+    source: finding.resource.s3BucketDetails[0].name
+  - name: remote_ip
+    source: finding.service.action.awsApiCallAction.remoteIpDetails.ipAddressV4
+  - name: account_id
+    source: finding.accountId
+  - name: region
+    source: finding.region
+  - name: finding_id
+    source: finding.id
